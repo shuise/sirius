@@ -41,7 +41,11 @@
 					siriusType: 'close',
 					pageId: '',
 					bookNames: [],
-					songs: []
+					songs: [],
+					wikis: {
+						'Douglas Engelbart': 'https://en.wikipedia.org/wiki/Douglas_Engelbart',
+						'NLS': 'https://en.wikipedia.org/wiki/NLS_(computer_system)'
+					}
 				}
 			},
 			created: function(){
@@ -107,6 +111,7 @@
 						}
 				        	// txt = _this.links(txt);
 				        	txt = _this.bookAndArticle(txt);
+				        	txt = _this.wikipedias(txt);
 
 				        item.innerHTML = txt;
 				        _this.videoPlayers(item);
@@ -116,6 +121,14 @@
 				        	node.contentEditable = true;
 				        item.parentNode.insertBefore(node, item.nextSibling);
 					});
+				},
+				wikipedias: function(str){
+					let wikis = this.wikis;
+					for(var prop in wikis){
+						let link = '<a href="' + wikis[prop] + '" target="_blank">' + prop + '</a>';
+						str = str.replace(prop, link);
+					}
+					return str;
 				},
 				bookAndArticle: function(str){
 					var pat = new RegExp('《([^《|》]*)》','g');
