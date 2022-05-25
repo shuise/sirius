@@ -1,0 +1,22 @@
+.DS_Store
+node_modules/
+_book/
+epubs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+crumbs.*
+
+# Editor directories and files
+*-autosave.kra
+*.crx
+*.zip
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+ .idea
+*.codekit3
