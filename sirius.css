@@ -1,0 +1,41 @@
+
+.sirius-wrapper{
+	user-select: none;
+	text-align: left;
+}
+.sirius-wrapper *{
+	margin: 0;
+	padding: 0;
+	/*font-family: "Helvetica Neue",Helvetica,Arial,sans-serif;*/
+	font-family: "Microsoft YaHei","PingFang SC","Hiragino Sans GB","Heiti SC","WenQuanYi Micro Hei",sans-serif;
+}
+.sirius-panel-fold{
+	position: fixed;
+	right: 5px;
+	bottom: 50%;
+	z-index: 999999999;
+	/*right: 50px;
+	-webkit-transform-origin: 100% 100%;
+	-webkit-transform: rotate(90deg);*/
+}
+.sirius-button{
+	display: block;
+	background: #333 !important;
+	color: #fff !important;
+	padding: 10px;
+	border-radius: 5px;
+	font-size: 14px;
+	cursor: pointer;
+	margin-bottom: 5px;
+}
+.sirius-textarea{
+	border-radius: 5px;
+	margin: 0;
+	padding: 10px;
+	height: 50px;
+	width: 100%;
+	background: #333;
+	color: #fff;
+}
+
+

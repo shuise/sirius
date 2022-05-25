@@ -1,0 +1,50 @@
+{
+    "name": "续貂",
+    "description": "续貂，通过技术手段还原创作者的本意，自动增强因为工具贫瘠以及平台限制而失去的部分。",
+    "version": "0.1",
+    "manifest_version": 2,
+    "browser_action": {
+        "default_icon": "logo.png",
+        "default_title": "续貂",
+        "default_popup": "index.html"
+    },
+    "icons": {
+        "128": "logo.png"
+    },
+    "content_security_policy": "script-src 'self' 'unsafe-eval'; object-src 'self'",
+    "content_scripts": [{
+        "js": [
+            "./underscore-1.8.3.js",
+            "./vue-2.6.10.js",
+            "./md5-browser.js",
+            "./Readability.js",
+            "./html2md-1.0.js",
+            "./html2canvas.js",
+            "./lodash.js",
+            "./tools.js",
+            "./sirius.js"
+        ],
+        "css": [
+            "./sirius.css"
+        ],
+        "matches": [
+            "https://*/*",
+            "http://*/*"
+        ],
+        "run_at": "document_end"
+    }],
+    "permissions": [
+        "contextMenus",
+        "notifications",
+        "storage",
+        "tabs",
+        "activeTab",
+        "scripting",
+        "browsingData",
+        "cookies",
+        "<all_urls>"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    }
+}
