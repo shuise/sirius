@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sirius 功能测试页</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, "Noto Sans SC", sans-serif; line-height: 1.7; color: #1e293b; background: #f8fafc; padding: 24px; }
+
+    .container { max-width: 720px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 40px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+
+    h1 { font-size: 28px; margin-bottom: 8px; }
+    h2 { font-size: 20px; margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 2px solid #e2e8f0; }
+    h3 { font-size: 16px; margin: 20px 0 8px; }
+    p { margin-bottom: 12px; }
+    code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+    pre { background: #1e293b; color: #e2e8f0; border-radius: 8px; padding: 16px; overflow-x: auto; margin-bottom: 16px; }
+    pre code { background: none; padding: 0; }
+    blockquote { border-left: 4px solid #6366f1; padding: 8px 16px; margin: 12px 0; background: #eef2ff; border-radius: 0 8px 8px 0; }
+    blockquote p { margin: 0; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
+    th, td { border: 1px solid #cbd5e1; padding: 8px 12px; text-align: center; }
+    th { background: #6366f1; color: #fff; }
+    tr:nth-child(even) { background: #f1f5f9; }
+    img { max-width: 100%; border-radius: 8px; margin: 8px 0; }
+    hr { border: none; border-top: 2px dashed #cbd5e1; margin: 24px 0; }
+    ul, ol { margin: 8px 0 12px 20px; }
+    li { margin-bottom: 4px; }
+    .footnotes { margin-top: 32px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 14px; color: #64748b; }
+    .footnotes li { margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <h1>Sirius 功能测试页</h1>
+  <p>本文档覆盖所有拓展功能的测试场景，打开后可点击扩展图标逐一验证。</p>
+
+  <!-- ==================== Feature 1: Links ==================== -->
+  <section>
+    <h2>1. 链接可点击（Feature 1）</h2>
+
+    <h3>1a. 纯文本 URL → 自动转为可点击链接</h3>
+    <p>请访问 https://github.com/sirius-extension 获取更多信息。</p>
+    <p>文档地址：https://example.com/sirius/docs 和 https://www.wikipedia.org 都是常见站点。</p>
+
+    <h3>1b. 被私域平台屏蔽的链接（data-link / data-url / data-href）</h3>
+    <p>
+      <a href="javascript:void(0)" data-link="https://developer.mozilla.org/zh-CN/">MDN 文档</a> —
+      此链接 href 被设为 javascript:void(0)，但 data-link 包含真实地址。
+    </p>
+    <p>
+      <a href="" data-url="https://www.amazon.com/dp/0134685997">Amazon 书籍链接</a> —
+      此链接 href 为空，data-url 包含真实地址。
+    </p>
+    <p>
+      <a href="javascript:;" data-href="https://news.ycombinator.com/">Hacker News</a> —
+      此链接 href 为 javascript:;，data-href 包含真实地址。
+    </p>
+  </section>
+
+  <!-- ==================== Feature 2: Books ==================== -->
+  <section>
+    <h2>2. 《》书籍识别（Feature 2）</h2>
+    <p>最近在读《设计模式：可复用面向对象软件的基础》，这是一本经典著作。</p>
+    <p>推荐《深入理解计算机系统》和《算法导论》这两本 CS 必读书。</p>
+    <p>小说方面，《三体》和《百年孤独》都值得反复阅读。</p>
+  </section>
+
+  <!-- ==================== Feature 3: Tables ==================== -->
+  <section>
+    <h2>3. 表格 ↔ 图表转换（Feature 3）</h2>
+    <p>下方表格应出现「📊 转为图表」按钮，点击后切换为柱状图。</p>
+    <table>
+      <tr>
+        <th>季度</th>
+        <th>销售额（万元）</th>
+        <th>增长率 (%)</th>
+      </tr>
+      <tr><td>Q1</td><td>120</td><td>15</td></tr>
+      <tr><td>Q2</td><td>185</td><td>22</td></tr>
+      <tr><td>Q3</td><td>220</td><td>30</td></tr>
+      <tr><td>Q4</td><td>310</td><td>42</td></tr>
+    </table>
+    <table>
+      <tr>
+        <th>年份</th>
+        <th>用户数（万）</th>
+        <th>城市</th>
+      </tr>
+      <tr><td>2021</td><td>45</td><td>北京</td></tr>
+      <tr><td>2022</td><td>82</td><td>上海</td></tr>
+      <tr><td>2023</td><td>156</td><td>深圳</td></tr>
+      <tr><td>2024</td><td>298</td><td>杭州</td></tr>
+    </table>
+  </section>
+
+  <!-- ==================== Feature 4: Copy ==================== -->
+  <section>
+    <h2>4. 移除复制屏蔽（Feature 4）</h2>
+    <div style="-webkit-user-select:none; user-select:none; background:#fef2f2; padding:12px; border-radius:8px; border:1px solid #fca5a5;">
+      <p style="margin:0; -webkit-user-select:none; user-select:none;">
+        🚫 这段文字设置了 <code>user-select: none</code>，正常情况下无法选中 / 复制。
+        启用 "移除复制屏蔽" 后应可自由选中和复制。
+      </p>
+    </div>
+  </section>
+
+  <!-- ==================== Feature 5: Download MD ==================== -->
+  <section>
+    <h2>5. 一键下载 Markdown（Feature 5）</h2>
+    <article>
+      <h3>这是一篇示例文章</h3>
+      <p>下载按钮会将以下内容导出为 <strong>.md 文件</strong>。</p>
+
+      <h4>无序列表</h4>
+      <ul>
+        <li>React 18</li>
+        <li>TypeScript 5</li>
+        <li>Vite 6</li>
+      </ul>
+
+      <h4>有序列表</h4>
+      <ol>
+        <li>安装依赖</li>
+        <li>配置构建</li>
+        <li>启动开发服务器</li>
+      </ol>
+
+      <h4>代码块</h4>
+      <pre><code class="lang-javascript">function hello() {
+  console.log("Hello, Sirius!");
+}</code></pre>
+
+      <h4>引用</h4>
+      <blockquote>
+        <p>读书破万卷，下笔如有神。—— 杜甫</p>
+      </blockquote>
+
+      <h4>水平线</h4>
+      <hr/>
+
+      <h4>链接与图片</h4>
+      <p>访问 <a href="https://github.com">GitHub</a> 了解更多。</p>
+      <p>
+        <img src="https://picsum.photos/400/200?random=1" alt="示例图片" />
+      </p>
+    </article>
+  </section>
+
+  <!-- ==================== Feature 6: Annotations ==================== -->
+  <section>
+    <h2>6. 注释提取与气泡（Feature 6）</h2>
+
+    <h3>6a. [^n] 风格脚注</h3>
+    <p>这是第一句话，需要补充说明[^1]。这是另一个需要注释的地方[^2]。</p>
+
+    <h3>6b. sup 链接风格脚注</h3>
+    <p>
+      语义化 HTML 可以提升可访问性<sup><a href="#fn-1">1</a></sup>，
+      而良好的命名规范能提高代码可维护性<sup><a href="#fn-2">2</a></sup>。
+    </p>
+  </section>
+
+  <!-- ==================== Feature 7: Export ==================== -->
+  <section>
+    <h2>7. 导出为 PDF / 图片（Feature 7）</h2>
+    <p>点击 popup 中的 "导出为图片" 或 "导出为 PDF" 按钮，将当前文章区域截图导出。</p>
+    <p>下方图表和内容将作为截图的一部分被捕获。</p>
+    <table>
+      <tr><th>月份</th><th>访问量</th></tr>
+      <tr><td>1月</td><td>12,000</td></tr>
+      <tr><td>2月</td><td>18,500</td></tr>
+      <tr><td>3月</td><td>25,300</td></tr>
+    </table>
+  </section>
+
+  <!-- ==================== Footnotes Definition ==================== -->
+  <div class="footnotes">
+    <ol>
+      <li id="fn-1">ARIA 标签可以显著提升屏幕阅读器的使用体验。<a href="#fn-ref-1">↩</a></li>
+      <li id="fn-2">如 ESLint、Prettier 等工具可以规范代码命名。</li>
+    </ol>
+  </div>
+
+  <div hidden>
+    <p id="fn1">脚注 1：这是传统的锚点脚注方式。</p>
+    <p id="fn2">脚注 2：某些老系统仍在使用这种格式。</p>
+  </div>
+
+  <script>
+    // [^1] 和 [^2] 的脚注定义（通过 JS 注入到页面底部供 content script 识别）
+    const defs = document.createElement('div');
+    defs.id = 'footnotes';
+    defs.innerHTML = `
+      <ol>
+        <li id="fnref-1">这是 [^1] 对应的脚注内容：语义化标签对 SEO 友好。</li>
+        <li id="fnref-2">这是 [^2] 对应的脚注内容：参考 W3C 规范文档。</li>
+      </ol>
+    `;
+    document.querySelector('.footnotes').after(defs);
+  </script>
+
+</div>
+</body>
+</html>
