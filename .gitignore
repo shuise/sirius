@@ -1,3 +1,6 @@
 node_modules/
 dist/
+build/
+.plasmo/
 .DS_Store
+*.local
