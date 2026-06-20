@@ -2,6 +2,13 @@ import "./style.css"
 import { useState, useEffect, useRef } from "react"
 import logoUrl from "data-base64:assets/logo.png"
 import { getConfig, saveConfig, chat } from "./common/ai"
+import md from "md.js"
+
+/** Render markdown content from AI responses */
+function MarkdownRenderer({ content }: { content: string }) {
+  const html = md(content)
+  return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
+}
 
 interface BookInfo {
   title: string
@@ -104,12 +111,29 @@ function IndexSidepanel() {
 
   const currentUrlRef = useRef("")
 
+  // Safe wrapper for tabs.sendMessage — consumes lastError to avoid uncaught errors
+  const sendMsg = (tabId: number, msg: Record<string, unknown>, cb?: (res: any) => void) => {
+    chrome.tabs.sendMessage(tabId, msg, (res) => {
+      if (chrome.runtime.lastError) {
+        // Receiving end doesn't exist — silently ignore
+        cb?.(null)
+        return
+      }
+      cb?.(res)
+    })
+  }
+
+  const queryActiveTab = (cb: (tab: chrome.tabs.Tab | null) => void) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      cb(tabs[0] || null)
+    })
+  }
+
   // Activate content script and load states
   const tryActivate = (cb?: () => void) => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const t = tabs[0]
+    queryActiveTab((t) => {
       if (!t?.id) return
-      chrome.tabs.sendMessage(t.id, { action: "activate" }, (res) => {
+      sendMsg(t.id, { action: "activate" }, (res) => {
         if (res?.states) {
           setStates(res.states)
           setReady(true)
@@ -122,10 +146,9 @@ function IndexSidepanel() {
   }
 
   const loadStates = () => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const t = tabs[0]
+    queryActiveTab((t) => {
       if (!t?.id) return
-      chrome.tabs.sendMessage(t.id, { action: "get-features" }, (res) => {
+      sendMsg(t.id, { action: "get-features" }, (res) => {
         if (res?.states) {
           setStates(res.states)
           setReady(true)
@@ -137,10 +160,9 @@ function IndexSidepanel() {
   }
 
   const loadBooks = () => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const t = tabs[0]
+    queryActiveTab((t) => {
       if (!t?.id) return
-      chrome.tabs.sendMessage(t.id, { action: "get-books-from-article" }, (res) => {
+      sendMsg(t.id, { action: "get-books-from-article" }, (res) => {
         if (res?.books) {
           setBooks(res.books.slice(0, 5))
         }
@@ -153,15 +175,14 @@ function IndexSidepanel() {
     setSummaryError("")
     setSummary(null)
 
-    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-      const t = tabs[0]
+    queryActiveTab(async (t) => {
       if (!t?.id) {
         setSummaryError("无可用页面")
         setSummaryLoading(false)
         return
       }
 
-      chrome.tabs.sendMessage(
+      sendMsg(
         t.id,
         { action: "get-article-text" },
         async (res) => {
@@ -269,13 +290,9 @@ function IndexSidepanel() {
   const toggle = (name: string) => {
     const next = !states[name]
     setStates((s) => ({ ...s, [name]: next }))
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]?.id) {
-        chrome.tabs.sendMessage(tabs[0].id, {
-          action: "toggle-feature",
-          name,
-          enabled: next,
-        })
+    queryActiveTab((t) => {
+      if (t?.id) {
+        sendMsg(t.id, { action: "toggle-feature", name, enabled: next })
       }
     })
   }
@@ -321,19 +338,27 @@ function IndexSidepanel() {
 
       const currentMsgs = (discussSessionsRef.current[url] || []).concat({ role: "user", content: msg })
 
-      const systemPrompt = sharedContext
-        ? `你是一个知识丰富的助手，请用中文回答用户的问题。回答简明扼要。\n\n${sharedContext}`
-        : "你是一个知识丰富的助手，请用中文回答用户的问题。回答简明扼要。"
+      const basePrompt = sharedContext
+        ? `你是一个知识丰富的助手，请用中文回答用户的问题。回答时必须严格遵循以下要求：
+
+1. **只讲事实，不输出个人观点** — 回答必须基于社会背景、媒体报道、国家政策、领导人观点等客观事实。不要添加主观评价、个人建议或推测性内容。如果某个问题没有可靠的事实依据，请如实说明"目前没有查到相关资料"
+2. **每条回答必须配有来源链接** — 每条回答末尾必须附上 2~5 个相关的参考来源链接，**全部以 Markdown 无序列表格式书写**，每条链接一行，格式为：减号空格方括号标题方括号圆括号URL圆括号。链接必须真实有效，只使用来自 Wikipedia、MDN、GitHub、权威新闻媒体等可信站点的链接，不要编造链接。如果不确定链接是否有效，宁可不放
+3. **注重排版** — 回答正文不能只是一段话。合理使用分段、有序/无序列表、引用块（>）、粗体（**关键术语**）等 Markdown 排版元素，让回答层次清晰、结构分明
+4. **配图片** — 如果问题涉及概念、人物、数据等，请用 Markdown 图片语法配上相关的说明图片（!\[描述\](图片URL)），图片来自可靠的公共 CDN 或维基百科等
+5. **简明扼要** — 直接回答问题，不罗嗦
+
+${sharedContext}`
+        : "你是一个知识丰富的助手，请用中文回答用户的问题。回答时必须严格遵循以下要求：\n\n1. **只讲事实，不输出个人观点** — 回答必须基于社会背景、媒体报道、国家政策、领导人观点等客观事实。不要添加主观评价、个人建议或推测性内容\n2. **每条回答必须配有来源链接** — 每条回答末尾必须附上 2~5 个相关的参考来源链接，**全部以 Markdown 无序列表格式书写**，每条链接一行，格式如：- [标题文字](https://...)。链接必须真实有效，不要编造链接\n3. **注重排版** — 合理使用分段、列表、引用块（>）、粗体等 Markdown 排版元素，让回答层次清晰\n4. **配图片** — 涉及概念、人物、数据时用 Markdown 图片语法配上说明图片\n5. **简明扼要** — 直接回答问题"
 
       const result = await chat(
         [
-          { role: "system", content: systemPrompt },
+          { role: "system", content: basePrompt },
           ...currentMsgs.map((m) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
           })),
         ],
-        { temperature: 0.7, maxTokens: 1000 },
+        { temperature: 0.7, maxTokens: 2000 },
       )
       setDiscussSessions((prev) => ({
         ...prev,
@@ -529,7 +554,11 @@ function IndexSidepanel() {
                           : "bg-white text-slate-700 shadow-sm"
                       }`}
                     >
-                      {m.content}
+                      {m.role === "assistant" ? (
+                        <MarkdownRenderer content={m.content} />
+                      ) : (
+                        m.content
+                      )}
                     </div>
                     <button
                       onClick={() => deleteDiscussMessage(i)}
