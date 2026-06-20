@@ -13,7 +13,12 @@ interface SummaryResult {
   rating: number // 1-5
 }
 
-type Tab = "export" | "feature-settings" | "settings"
+interface DiscussMessage {
+  role: "user" | "assistant"
+  content: string
+}
+
+type Tab = "export" | "discuss" | "settings"
 
 const CACHE_KEY = "sirius:summary-cache"
 
@@ -36,16 +41,17 @@ function writeCache(url: string, entry: CacheEntry) {
   localStorage.setItem(CACHE_KEY, JSON.stringify(cache))
 }
 
+function sanitize(s: string): string {
+  return s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\uD800-\uDFFF]/g, "")
+}
+
 async function callDeepSeekSummary(text: string): Promise<SummaryResult> {
   const { apiKey } = await getConfig()
   if (!apiKey) {
     throw new Error("请先在系统设置中配置 API Key")
   }
 
-  // Sanitize text: strip control chars that could break JSON serialization
-  const safeText = text
-    .slice(0, 4000)
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\uD800-\uDFFF]/g, "")
+  const safeText = sanitize(text).slice(0, 4000)
 
   const prompt = `你是一个中文内容编辑助手。请阅读以下文章内容，用中文写一段200字以内的摘要，并给出1-5星的推荐指数（5星为最佳）。
 
@@ -86,7 +92,34 @@ function IndexSidepanel() {
   const [apiKey, setApiKey] = useState("")
   const [saved, setSaved] = useState(false)
 
+  // discuss state — keyed by page URL
+  const [discussSessions, setDiscussSessions] = useState<Record<string, DiscussMessage[]>>({})
+  const discussSessionsRef = useRef(discussSessions)
+  discussSessionsRef.current = discussSessions
+  const [discussInput, setDiscussInput] = useState("")
+  const [discussLoading, setDiscussLoading] = useState(false)
+  const discussEndRef = useRef<HTMLDivElement>(null)
+  const articleTextRef = useRef("")
+  const pageTitleRef = useRef("")
+
   const currentUrlRef = useRef("")
+
+  // Activate content script and load states
+  const tryActivate = (cb?: () => void) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const t = tabs[0]
+      if (!t?.id) return
+      chrome.tabs.sendMessage(t.id, { action: "activate" }, (res) => {
+        if (res?.states) {
+          setStates(res.states)
+          setReady(true)
+          cb?.()
+        } else {
+          setReady(false)
+        }
+      })
+    })
+  }
 
   const loadStates = () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -140,8 +173,9 @@ function IndexSidepanel() {
 
           const pageUrl = res.url || t.url || ""
           currentUrlRef.current = pageUrl
+          pageTitleRef.current = res.title || t.title || ""
+          articleTextRef.current = sanitize(res.textContent)
 
-          // Check cache
           const cache = readCache()
           const cached = cache[pageUrl]
           if (cached) {
@@ -150,7 +184,6 @@ function IndexSidepanel() {
             return
           }
 
-          // No cache — call AI
           const { apiKey } = await getConfig()
           if (!apiKey) {
             setSummaryError("请先在系统设置中配置 API Key")
@@ -173,9 +206,21 @@ function IndexSidepanel() {
 
   // Listen for tab switches
   useEffect(() => {
-    const onActivated = () => doLoadSummary()
+    const onActivated = () => {
+      tryActivate(() => {
+        loadStates()
+        loadBooks()
+        doLoadSummary()
+      })
+    }
     const onUpdated = (_tabId: number, changeInfo: { status?: string }) => {
-      if (changeInfo.status === "complete") doLoadSummary()
+      if (changeInfo.status === "complete") {
+        tryActivate(() => {
+          loadStates()
+          loadBooks()
+          doLoadSummary()
+        })
+      }
     }
 
     chrome.tabs.onActivated.addListener(onActivated)
@@ -187,10 +232,35 @@ function IndexSidepanel() {
     }
   }, [])
 
+  // Listen for open-discussion message from background
   useEffect(() => {
-    loadStates()
-    loadBooks()
-    doLoadSummary()
+    const handler = (msg: { action: string; text?: string }) => {
+      if (msg.action === "open-discussion" && msg.text) {
+        setTab("discuss")
+        // handleDiscussSend will add the user message — don't duplicate here
+        handleDiscussSend(msg.text)
+      }
+    }
+    chrome.runtime.onMessage.addListener(handler)
+    return () => chrome.runtime.onMessage.removeListener(handler)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Auto-scroll discuss
+  useEffect(() => {
+    discussEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [discussSessions, currentUrlRef.current])
+
+  const loadAll = () => {
+    tryActivate(() => {
+      loadStates()
+      loadBooks()
+      doLoadSummary()
+    })
+  }
+
+  useEffect(() => {
+    loadAll()
     getConfig().then((cfg) => {
       setApiKey(cfg.apiKey)
     })
@@ -221,7 +291,6 @@ function IndexSidepanel() {
   }
 
   const handleRetrySummary = () => {
-    // Remove cache entry for current URL so it re-fetches
     if (currentUrlRef.current) {
       const cache = readCache()
       delete cache[currentUrlRef.current]
@@ -230,7 +299,88 @@ function IndexSidepanel() {
     doLoadSummary()
   }
 
+  const handleDiscussSend = async (text?: string) => {
+    const msg = sanitize(text || discussInput).trim()
+    if (!msg || discussLoading) return
+
+    const url = currentUrlRef.current || "default"
+    setDiscussInput("")
+
+    // Add user message to session
+    setDiscussSessions((prev) => ({
+      ...prev,
+      [url]: [...(prev[url] || []), { role: "user", content: msg }],
+    }))
+    setDiscussLoading(true)
+
+    try {
+      // Include page article text as shared context for all queries
+      const sharedContext = articleTextRef.current
+        ? `以下是当前页面的正文内容，供你参考上下文：\n\n${articleTextRef.current.slice(0, 2000)}`
+        : null
+
+      const currentMsgs = (discussSessionsRef.current[url] || []).concat({ role: "user", content: msg })
+
+      const systemPrompt = sharedContext
+        ? `你是一个知识丰富的助手，请用中文回答用户的问题。回答简明扼要。\n\n${sharedContext}`
+        : "你是一个知识丰富的助手，请用中文回答用户的问题。回答简明扼要。"
+
+      const result = await chat(
+        [
+          { role: "system", content: systemPrompt },
+          ...currentMsgs.map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          })),
+        ],
+        { temperature: 0.7, maxTokens: 1000 },
+      )
+      setDiscussSessions((prev) => ({
+        ...prev,
+        [url]: [...(prev[url] || []), { role: "assistant", content: result }],
+      }))
+    } catch (e) {
+      setDiscussSessions((prev) => ({
+        ...prev,
+        [url]: [
+          ...(prev[url] || []),
+          { role: "assistant", content: `错误: ${sanitize((e as Error).message)}` },
+        ],
+      }))
+    }
+    setDiscussLoading(false)
+  }
+
   const renderStars = (n: number) => "★".repeat(n) + "☆".repeat(5 - n)
+
+  const exportSessionAsMd = () => {
+    const url = currentUrlRef.current || "unknown"
+    const pageTitle = (pageTitleRef.current || url).replace(/[<>:"/\\|?*]/g, "_").slice(0, 80)
+    const lines = [`# Sirius 讨论 - ${url}`, "", ...currentMessages.map((m) => `## ${m.role === "user" ? "你" : "AI"}\n\n${m.content}\n`)]
+    const md = lines.join("\n")
+    const blob = new Blob([md], { type: "text/markdown" })
+    const a = document.createElement("a")
+    a.href = URL.createObjectURL(blob)
+    a.download = `${pageTitle}-discuss.md`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  const deleteDiscussMessage = (index: number) => {
+    const url = currentUrlRef.current || "default"
+    setDiscussSessions((prev) => {
+      const msgs = prev[url] || []
+      const next = msgs.filter((_, i) => i !== index)
+      if (next.length === 0) {
+        const { [url]: _, ...rest } = prev
+        return rest
+      }
+      return { ...prev, [url]: next }
+    })
+  }
+
+  // Current session messages for the active page
+  const currentMessages = discussSessions[currentUrlRef.current] || []
 
   return (
     <div className="h-screen flex flex-col bg-gradient-to-br from-amber-50 to-orange-50">
@@ -244,8 +394,8 @@ function IndexSidepanel() {
       <nav className="flex border-b border-amber-100 bg-white">
         {[
           { id: "export" as Tab, label: "导出内容" },
-          { id: "feature-settings" as Tab, label: "功能设置" },
-          { id: "settings" as Tab, label: "系统设置" },
+          { id: "discuss" as Tab, label: "讨论" },
+          { id: "settings" as Tab, label: "设置" },
         ].map((t) => (
           <button
             key={t.id}
@@ -266,172 +416,250 @@ function IndexSidepanel() {
         {tab === "export" && (
           <div className="pt-2 space-y-3">
             {!ready && (
-              <p className="text-sm text-slate-400 text-center py-8">
-                请刷新页面后重试
-              </p>
+              <div className="text-center py-8">
+                <p className="text-sm text-slate-400 mb-2">请先点击扩展图标激活</p>
+                <button
+                  onClick={loadAll}
+                  className="px-4 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 transition-colors"
+                >
+                  激活
+                </button>
+              </div>
             )}
 
-            {/* AI 摘要 */}
-            <div className="bg-white rounded-lg p-4 shadow-sm">
-              {summaryLoading ? (
-                <div className="flex items-center gap-2 text-sm text-slate-400">
-                  <span className="inline-block w-3 h-3 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
-                  正在生成摘要...
-                </div>
-              ) : summaryError ? (
-                <div className="text-xs text-slate-400">
-                  <p>{summaryError}</p>
-                  <button
-                    onClick={handleRetrySummary}
-                    className="mt-1 text-orange-500 underline"
-                  >
-                    重试
-                  </button>
-                </div>
-              ) : summary ? (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-semibold text-slate-700">
-                      内容摘要
-                    </h3>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-orange-500">
-                        {renderStars(summary.rating)}
-                      </span>
+            {ready && (
+              <>
+                {/* AI 摘要 */}
+                <div className="bg-white rounded-lg p-4 shadow-sm">
+                  {summaryLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-slate-400">
+                      <span className="inline-block w-3 h-3 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
+                      正在生成摘要...
+                    </div>
+                  ) : summaryError ? (
+                    <div className="text-xs text-slate-400">
+                      <p>{summaryError}</p>
                       <button
-                        onClick={() => navigator.clipboard.writeText(summary.summary)}
-                        className="text-xs text-slate-400 hover:text-orange-500 transition-colors"
-                        title="复制摘要"
+                        onClick={handleRetrySummary}
+                        className="mt-1 text-orange-500 underline"
                       >
-                        📋
+                        重试
                       </button>
                     </div>
+                  ) : summary ? (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-sm font-semibold text-slate-700">内容摘要</h3>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-orange-500">
+                            {renderStars(summary.rating)}
+                          </span>
+                          <button
+                            onClick={() => navigator.clipboard.writeText(summary.summary)}
+                            className="text-xs text-slate-400 hover:text-orange-500 transition-colors"
+                            title="复制摘要"
+                          >
+                            📋
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-600 leading-relaxed">{summary.summary}</p>
+                    </div>
+                  ) : null}
+                </div>
+
+                <button
+                  onClick={() => sendAction("download-md")}
+                  className="w-full py-3 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 transition-colors"
+                >
+                  ⬇ 全文导出 Markdown
+                </button>
+                <button
+                  onClick={() => sendAction("export-pdf")}
+                  className="w-full py-3 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 transition-colors"
+                >
+                  📄 全文导出 PDF
+                </button>
+
+                {/* 相关商品 */}
+                {books.length > 0 && (
+                  <div className="bg-white rounded-lg p-4 shadow-sm">
+                    <h3 className="text-sm font-semibold text-slate-700 mb-3">相关商品</h3>
+                    <div className="space-y-2">
+                      {books.map((book, i) => (
+                        <a
+                          key={i}
+                          href={book.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 text-sm text-slate-600 hover:text-orange-600 transition-colors no-underline"
+                        >
+                          <span className="text-base">📖</span>
+                          <span>{book.title}</span>
+                          <span className="ml-auto text-xs text-slate-400">微信读书 →</span>
+                        </a>
+                      ))}
+                    </div>
                   </div>
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    {summary.summary}
-                  </p>
-                </div>
-              ) : null}
-            </div>
-
-            <button
-              onClick={() => sendAction("download-md")}
-              className="w-full py-3 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 transition-colors"
-            >
-              ⬇ 全文导出 Markdown
-            </button>
-            <button
-              onClick={() => sendAction("export-pdf")}
-              className="w-full py-3 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 transition-colors"
-            >
-              📄 全文导出 PDF
-            </button>
-
-            {/* 相关商品 */}
-            {books.length > 0 && (
-              <div className="bg-white rounded-lg p-4 shadow-sm">
-                <h3 className="text-sm font-semibold text-slate-700 mb-3">
-                  相关商品
-                </h3>
-                <div className="space-y-2">
-                  {books.map((book, i) => (
-                    <a
-                      key={i}
-                      href={book.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 text-sm text-slate-600 hover:text-orange-600 transition-colors no-underline"
-                    >
-                      <span className="text-base">📖</span>
-                      <span>{book.title}</span>
-                      <span className="ml-auto text-xs text-slate-400">微信读书 →</span>
-                    </a>
-                  ))}
-                </div>
-              </div>
+                )}
+              </>
             )}
           </div>
         )}
 
-        {tab === "feature-settings" && (
-          <div className="space-y-1.5">
-            {!ready && (
-              <p className="text-sm text-slate-400 text-center py-8">
-                请刷新页面后重试
-              </p>
-            )}
-            <div className="space-y-1.5">
-              {[
-                { key: "links", icon: "🔗", label: "链接可点击", desc: "还原被屏蔽的超链接" },
-                { key: "books", icon: "📚", label: "《》书籍识别", desc: "识别书名号中的书籍" },
-                { key: "tables", icon: "📊", label: "表格 ↔ 图表", desc: "一键切换表格/柱状图" },
-                { key: "copy", icon: "📋", label: "移除复制屏蔽", desc: "解除禁止复制限制" },
-                { key: "annotations", icon: "💬", label: "注释气泡", desc: "脚注 hover 气泡显示" },
-                { key: "download", icon: "📥", label: "一键下载 MD", desc: "Markdown / PDF 导出" },
-                { key: "export", icon: "🖼️", label: "导出引擎", desc: "PDF 导出核心模块" },
-              ].map((f) => (
-                <label
-                  key={f.key}
-                  className="flex items-center gap-3 bg-white rounded-lg px-3 py-2.5 shadow-sm cursor-pointer"
+        {tab === "discuss" && (
+          <div className="flex flex-col h-full -m-3">
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              {currentMessages.length === 0 && (
+                <p className="text-sm text-slate-400 text-center py-8">
+                  在页面上选中文字，右键选择「发送到 Sirius 讨论」
+                </p>
+              )}
+              {currentMessages.map((m, i) => (
+                <div
+                  key={i}
+                  className={`flex group ${m.role === "user" ? "justify-end" : "justify-start"}`}
                 >
-                  <span className="text-lg">{f.icon}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-slate-700">
-                      {f.label}
+                  <div className="relative max-w-[85%]">
+                    <div
+                      className={`rounded-lg px-3 py-2 text-sm ${
+                        m.role === "user"
+                          ? "bg-orange-500 text-white"
+                          : "bg-white text-slate-700 shadow-sm"
+                      }`}
+                    >
+                      {m.content}
                     </div>
-                    <div className="text-xs text-slate-400 truncate">{f.desc}</div>
+                    <button
+                      onClick={() => deleteDiscussMessage(i)}
+                      className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-400 text-white text-[10px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
+                      title="删除"
+                    >
+                      ×
+                    </button>
                   </div>
-                  <input
-                    type="checkbox"
-                    checked={!!states[f.key]}
-                    onChange={() => toggle(f.key)}
-                    className="accent-orange-500 w-4 h-4"
-                  />
-                </label>
+                </div>
               ))}
+              {discussLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-white rounded-lg px-3 py-2 text-sm text-slate-400 shadow-sm flex items-center gap-2">
+                    <span className="inline-block w-3 h-3 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />
+                    思考中...
+                  </div>
+                </div>
+              )}
+              <div ref={discussEndRef} />
+            </div>
+
+            {/* Input */}
+            <div className="p-3 border-t border-amber-100 bg-white">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={discussInput}
+                  onChange={(e) => setDiscussInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleDiscussSend()}
+                  placeholder="输入你的问题..."
+                  className="flex-1 px-3 py-2 border border-amber-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                />
+                <button
+                  onClick={() => handleDiscussSend()}
+                  disabled={discussLoading || !discussInput.trim()}
+                  className="px-4 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  发送
+                </button>
+                {currentMessages.length > 0 && (
+                  <button
+                    onClick={exportSessionAsMd}
+                    className="px-3 py-2 rounded-lg bg-white border border-amber-300 text-sm text-slate-600 hover:bg-amber-50 transition-colors"
+                    title="导出会话"
+                  >
+                    📥
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}
 
         {tab === "settings" && (
-          <div className="bg-white rounded-lg p-4 shadow-sm space-y-4">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-700 mb-1">DeepSeek API 配置</h3>
-              <p className="text-xs text-slate-400">
-                用于书籍识别等 AI 功能。目前仅支持 DeepSeek。
-              </p>
+          <div className="space-y-3">
+            {/* Feature toggles */}
+            <div className="bg-white rounded-lg p-4 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-700 mb-3">功能开关</h3>
+              <div className="space-y-1.5">
+                {[
+                  { key: "links", icon: "🔗", label: "链接可点击", desc: "还原被屏蔽的超链接" },
+                  { key: "books", icon: "📚", label: "《》书籍识别", desc: "识别书名号中的书籍" },
+                  { key: "tables", icon: "📊", label: "表格 ↔ 图表", desc: "一键切换表格/柱状图" },
+                  { key: "copy", icon: "📋", label: "移除复制屏蔽", desc: "解除禁止复制限制" },
+                  { key: "annotations", icon: "💬", label: "注释气泡", desc: "脚注 hover 气泡显示" },
+                  { key: "download", icon: "📥", label: "一键下载 MD", desc: "Markdown / PDF 导出" },
+                  { key: "export", icon: "🖼️", label: "导出引擎", desc: "PDF 导出核心模块" },
+                ].map((f) => (
+                  <label
+                    key={f.key}
+                    className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-slate-50 rounded-lg transition-colors"
+                  >
+                    <span className="text-lg">{f.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-slate-700">{f.label}</div>
+                      <div className="text-xs text-slate-400 truncate">{f.desc}</div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={!!states[f.key]}
+                      onChange={() => toggle(f.key)}
+                      className="accent-orange-500 w-4 h-4"
+                    />
+                  </label>
+                ))}
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                API Key
-              </label>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-xxxxxxxxxxxxxxxx"
-                className="w-full px-3 py-2 border border-amber-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
-              />
-            </div>
-
-            <button
-              onClick={handleSaveKey}
-              className="w-full py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 transition-colors"
-            >
-              {saved ? "已保存 ✓" : "保存"}
-            </button>
-
-            <div className="bg-slate-50 rounded-lg p-3">
-              <p className="text-xs text-slate-500 leading-relaxed">
-                如何获取 API Key？
-                <br />
-                1. 访问 <a href="https://platform.deepseek.com" target="_blank" rel="noopener noreferrer" className="text-orange-500 underline">platform.deepseek.com</a>
-                <br />
-                2. 注册并登录后进入 API Keys 页面
-                <br />
-                3. 创建新的 API Key 并粘贴到上方输入框
-              </p>
+            {/* API Key */}
+            <div className="bg-white rounded-lg p-4 shadow-sm space-y-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-700 mb-1">DeepSeek API 配置</h3>
+                <p className="text-xs text-slate-400">用于摘要和讨论功能。</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">API Key</label>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="sk-xxxxxxxxxxxxxxxx"
+                  className="w-full px-3 py-2 border border-amber-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                />
+              </div>
+              <button
+                onClick={handleSaveKey}
+                className="w-full py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 transition-colors"
+              >
+                {saved ? "已保存 ✓" : "保存"}
+              </button>
+              <div className="bg-slate-50 rounded-lg p-3">
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  如何获取 API Key？
+                  <br />
+                  1. 访问{" "}
+                  <a
+                    href="https://platform.deepseek.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-orange-500 underline"
+                  >
+                    platform.deepseek.com
+                  </a>
+                  <br />
+                  2. 注册并登录后进入 API Keys 页面
+                  <br />
+                  3. 创建新的 API Key 并粘贴到上方输入框
+                </p>
+              </div>
             </div>
           </div>
         )}

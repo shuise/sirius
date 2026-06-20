@@ -1,8 +1,8 @@
 /**
  * 通用 AI 服务
  *
- * 目前仅支持 DeepSeek API。
- * API Key 通过侧边栏「系统设置」页面配置。
+ * 所有网络请求通过 background service worker 代理发出。
+ * API Key 通过侧边栏「设置」页面配置。
  */
 
 export interface AIConfig {
@@ -18,9 +18,6 @@ export interface AICompletionOptions {
   temperature?: number
   maxTokens?: number
 }
-
-const DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1"
-const DEEPSEEK_MODEL = "deepseek-chat"
 
 const STORAGE_KEY = "sirius:ai-config"
 
@@ -39,6 +36,7 @@ export function saveConfig(config: AIConfig): Promise<void> {
   })
 }
 
+/** Send chat completions request through background */
 export async function chat(
   messages: AIChatMessage[],
   opts: AICompletionOptions = {},
@@ -48,72 +46,39 @@ export async function chat(
     throw new Error("请在系统设置中配置 API Key")
   }
 
-  const response = await fetch(`${DEEPSEEK_ENDPOINT}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: DEEPSEEK_MODEL,
-      messages,
-      temperature: opts.temperature ?? 0.3,
-      max_tokens: opts.maxTokens ?? 4096,
-    }),
+  const result = await chrome.runtime.sendMessage({
+    action: "ai-chat",
+    messages,
+    opts,
   })
 
-  if (!response.ok) {
-    const err = await response.text().catch(() => "")
-    // Truncate response body for readable error messages
-    const detail = err.length > 500 ? err.slice(0, 500) + "..." : err
-    throw new Error(`DeepSeek API error (${response.status}): ${detail}`)
+  if (result?.error) {
+    throw new Error(result.error)
   }
 
-  const data = await response.json()
-  return data.choices?.[0]?.message?.content || ""
+  return result?.content || ""
 }
 
 // https://weread.qq.com/r/weread-skills — 微信读书 Skill
-// 通过微信读书搜索 API 查询书籍，确保真实有效，返回书名、作者、链接
 export interface Book {
   title: string
   author: string
   link: string
 }
 
+/** Search books via WeChat Read through background */
 export async function getWereadBooksInfo(bookNames: string[]): Promise<Book[]> {
-  const results: Book[] = []
+  if (bookNames.length === 0) return []
 
-  for (const name of bookNames) {
-    if (results.length >= 5) break
-    try {
-      const url = `https://weread.qq.com/web/search?q=${encodeURIComponent(name)}`
-      const resp = await fetch(url, { headers: { Accept: "application/json" } })
-      const data = await resp.json()
+  const result = await chrome.runtime.sendMessage({
+    action: "weread-search",
+    bookNames,
+  })
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const books: any[] = data?.books || []
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const matched = books.find((b: any) => {
-        const bt: string = b?.bookInfo?.title || ""
-        return bt.includes(name) || name.includes(bt)
-      })
-
-      if (matched) {
-        const info = matched.bookInfo || {}
-        const bookId: string = info.bookId || ""
-        results.push({
-          title: info.title || name,
-          author: (info.author || "").replace(/\/.*$/, "").trim(),
-          link: bookId
-            ? `https://weread.qq.com/web/bookDetail/${bookId}`
-            : `https://weread.qq.com/web/search?q=${encodeURIComponent(name)}`,
-        })
-      }
-    } catch {
-      // 查询失败则跳过
-    }
+  if (result?.error) {
+    console.warn("[Sirius] weread search error:", result.error)
+    return []
   }
 
-  return results
+  return result?.books || []
 }

@@ -19,11 +19,14 @@ import { getRawBooks, verifyBooks } from "./features/books"
 import { extractArticle } from "./common/extract"
 import { getWereadBooksInfo } from "./common/ai"
 
-console.log("[Sirius] content script loaded")
+console.log("[Sirius] content script loaded (inactive)")
 
 const activeFeatures = new Map<string, boolean>()
+let activated = false
 
 function initAll() {
+  if (activated) return
+  activated = true
   updatePageState()
   getAllFeatures().forEach((feat) => {
     try {
@@ -77,6 +80,10 @@ function getStates(): Record<string, boolean> {
 // Listen for messages
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg.action) {
+    case "activate":
+      initAll()
+      sendResponse({ ok: true, states: getStates() })
+      break
     case "get-features":
       sendResponse({ states: getStates() })
       break
@@ -110,12 +117,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case "get-books-from-article": {
       const article = extractArticle()
       const bodyText = article?.textContent || document.body.innerText
-      // Parse 《》 book titles
+      // Parse up to 15 《》 book titles
       const seen = new Set<string>()
       const bookRegex = /《([^》]+)》/g
       let match: RegExpExecArray | null
       const titles: string[] = []
-      while ((match = bookRegex.exec(bodyText)) !== null) {
+      while ((match = bookRegex.exec(bodyText)) !== null && titles.length < 15) {
         const t = match[1].trim()
         if (t && !seen.has(t)) {
           seen.add(t)
@@ -138,9 +145,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 })
 
-// DOM ready
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", initAll)
-} else {
-  initAll()
-}
+// Do NOT auto-init — wait for "activate" message from background
